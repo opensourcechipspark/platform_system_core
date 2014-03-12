@@ -254,6 +254,27 @@ int mtd_name_to_number(const char *name)
     return -1;
 }
 
+const char *mtd_number_to_name(int number)
+{
+    int n;
+    if (mtd_part_count < 0) {
+        mtd_part_count = 0;
+        find_mtd_partitions();
+    }
+    for (n = 0; n < mtd_part_count; n++) {
+        if (number == mtd_part_map[n].number) {
+            return mtd_part_map[n].name;
+        }
+    }
+    mtd_part_count = 0;
+    find_mtd_partitions();
+    for (n = 0; n < mtd_part_count; n++) {
+        if (number == mtd_part_map[n].number) {
+            return mtd_part_map[n].name;
+        }
+    }
+    return NULL;
+}
 /*
  * gettime() - returns the time in seconds of the system's monotonic clock or
  * zero on error.

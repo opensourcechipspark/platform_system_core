@@ -78,6 +78,7 @@
  * a la the Nexus One.
  */
 #define MF_NOEMULATEDSD 0x400
+#define MF_RESIZE       0x800
 
 #define DM_BUF_SIZE 4096
 

@@ -31,6 +31,7 @@
 #include <sys/resource.h>
 #include <sys/wait.h>
 #include <linux/loop.h>
+#include <sys/utsname.h>
 #include <cutils/partition_utils.h>
 #include <cutils/android_reboot.h>
 #include <sys/system_properties.h>
@@ -135,10 +136,23 @@ static int _chmod(const char *path, mode_t mode)
 
 static int insmod(const char *filename, char *options)
 {
-    void *module;
+    void *module = NULL;
     unsigned size;
     int ret;
+    struct utsname name;
+    char filename_release[PATH_MAX];
 
+    memset(&name, 0, sizeof(name));
+    ret = uname(&name);
+    if (ret == 0 && name.release) {
+        /* try insmod filename.x.x.x */
+        memset(filename_release, 0, sizeof(filename_release));
+        strncat(filename_release, filename, sizeof(filename_release) - 1);
+        strncat(filename_release, ".", sizeof(filename_release) - 1);
+        strncat(filename_release, name.release, sizeof(filename_release) - 1);
+        module = read_file(filename_release, &size);
+    }
+    if (!module)
     module = read_file(filename, &size);
     if (!module)
         return -1;
@@ -399,7 +413,7 @@ int do_mount(int nargs, char **args)
 
         if (wait)
             wait_for_file(tmp, COMMAND_RETRY_TIMEOUT);
-        if (mount(tmp, target, system, flags, options) < 0) {
+        if (__mount(tmp, target, system, flags, options) < 0) {
             return -1;
         }
 
@@ -447,7 +461,7 @@ int do_mount(int nargs, char **args)
     } else {
         if (wait)
             wait_for_file(source, COMMAND_RETRY_TIMEOUT);
-        if (mount(source, target, system, flags, options) < 0) {
+        if (__mount(source, target, system, flags, options) < 0) {
             return -1;
         }
 

@@ -1243,6 +1243,10 @@ static int should_drop_privileges() {
             }
         }
     }
+	property_get("sys.rkadb.root", value, "");
+     if (strcmp(value, "1") == 0) {
+             secure =0;
+		}
     return secure;
 #endif /* ALLOW_ADBD_ROOT */
 }

@@ -961,7 +961,7 @@ int main(int argc, char **argv)
     klog_init();
     klog_set_level(CHARGER_KLOG_LEVEL);
 
-    dump_last_kmsg();
+    //dump_last_kmsg();
 
     LOGI("--------------- STARTING CHARGER MODE ---------------\n");
 

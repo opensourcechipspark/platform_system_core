@@ -113,6 +113,8 @@
 #define VENDOR_ID_ARCHOS        0x0E79
 // Positivo's USB Vendor ID
 #define VENDOR_ID_POSITIVO      0x1662
+// Rockchip's USB Vendor ID
+#define VENDOR_ID_ROCKCHIP      0x2207
 // Fujitsu's USB Vendor ID
 #define VENDOR_ID_FUJITSU       0x04C5
 // Lumigon's USB Vendor ID
@@ -198,6 +200,7 @@ int builtInVendorIds[] = {
     VENDOR_ID_PEGATRON,
     VENDOR_ID_ARCHOS,
     VENDOR_ID_POSITIVO,
+    VENDOR_ID_ROCKCHIP,
     VENDOR_ID_FUJITSU,
     VENDOR_ID_LUMIGON,
     VENDOR_ID_QUANTA,

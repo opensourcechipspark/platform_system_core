@@ -716,6 +716,25 @@ static void import_kernel_nv(char *name, int for_emulator)
     }
 }
 
+static void symlink_fstab()
+{
+    char fstab_path[255] = "/fstab.";
+    char fstab_default_path[50] = "/fstab.";
+    int ret = -1;
+
+    // fstab.rk30board.bootmode.unknown
+    strcat(fstab_path, hardware);
+    strcat(fstab_path, ".bootmode.");
+    strcat(fstab_path, bootmode);
+
+    strcat(fstab_default_path, hardware);
+
+    ret = symlink(fstab_path, fstab_default_path);
+    if (ret < 0) {
+        ERROR("%s : failed", __func__);
+    }
+}
+
 static void export_kernel_boot_props(void)
 {
     char tmp[PROP_VALUE_MAX];
@@ -726,7 +745,7 @@ static void export_kernel_boot_props(void)
         const char *dest_prop;
         const char *def_val;
     } prop_map[] = {
-        { "ro.boot.serialno", "ro.serialno", "", },
+     //   { "ro.boot.serialno", "ro.serialno", "", },
         { "ro.boot.mode", "ro.bootmode", "unknown", },
         { "ro.boot.baseband", "ro.baseband", "unknown", },
         { "ro.boot.bootloader", "ro.bootloader", "unknown", },
@@ -765,6 +784,8 @@ static void export_kernel_boot_props(void)
         property_set("ro.factorytest", "2");
     else
         property_set("ro.factorytest", "0");
+
+    symlink_fstab();
 }
 
 static void process_kernel_cmdline(void)
@@ -959,6 +980,36 @@ static void selinux_initialize(void)
     security_setenforce(is_enforcing);
 }
 
+static void rk_parse_cpu(void)
+{
+    int fd;
+    char buf[64];
+
+    fd = open("/sys/devices/system/cpu/type", O_RDONLY);
+    if (fd >= 0) {
+        int n = read(fd, buf, sizeof(buf) - 1);
+        if (n > 0) {
+            if (buf[n-1] == '\n')
+                n--;
+            buf[n] = 0;
+            property_set("ro.rk.cpu", buf);
+        }
+        close(fd);
+    }
+
+    fd = open("/sys/devices/system/cpu/soc", O_RDONLY);
+    if (fd >= 0) {
+        int n = read(fd, buf, sizeof(buf) - 1);
+        if (n > 0) {
+            if (buf[n-1] == '\n')
+                n--;
+            buf[n] = 0;
+            property_set("ro.rk.soc", buf);
+        }
+        close(fd);
+    }
+}
+
 int main(int argc, char **argv)
 {
     int fd_count = 0;
@@ -1006,7 +1057,10 @@ int main(int argc, char **argv)
          */
     open_devnull_stdio();
     klog_init();
+    memlog_init();
     property_init();
+
+    rk_parse_cpu();
 
     get_hardware_name(hardware, &revision);
 
@@ -1143,6 +1197,101 @@ int main(int argc, char **argv)
             }
         }
     }
+    memlog_close();
+    return 0;
+}
+
+static int run(const char *filename, char *const argv[])
+{
+    struct stat s;
+    int status;
+    pid_t pid;
+
+    if (stat(filename, &s) != 0) {
+        ERROR("cannot find '%s'", filename);
+        return -1;
+    }
+
+    NOTICE("executing '%s'\n", filename);
+
+    pid = fork();
+
+    if (pid == 0) {
+
+        char tmp[32];
+        int fd, sz;
+
+        get_property_workspace(&fd, &sz);
+        sprintf(tmp, "%d,%d", dup(fd), sz);
+        add_environment("ANDROID_PROPERTY_WORKSPACE", tmp);
+        /* redirect stdio to null */
+        zap_stdio();
+
+        setpgid(0, getpid());
+        /* execute */
+        execve(filename, argv, (char **) ENV);
+        /* exit */
+        _exit(0);
+    }
+
+    if (pid < 0) {
+        ERROR("failed to fork and start '%s'\n", filename);
+        return -1;
+    }
+
+    if (-1 == waitpid(pid, &status, WCONTINUED | WUNTRACED)) {
+        ERROR("Wait for child error\n");
+        return -1;
+    }
+
+    if (WIFEXITED(status)) {
+        NOTICE("executed '%s' done\n", filename);
+    }
 
     return 0;
+}
+
+int __mount(const char *source, const char *target,
+            const char *fstype, unsigned long flags,
+            const void *options)
+{
+    if (!strncmp(fstype, "ext", 3)) {
+        int err;
+        const char *const resize2fs_argv[] = { "/sbin/resize2fs", source, NULL };
+        /* -y Assume an answer of 'yes' to all questions; allows e2fsck to be used non-interactively. */
+        const char *const e2fsck_argv[] = { "/sbin/e2fsck", "-y", source, NULL };
+        /* -t fs-type
+              Specify  the filesystem type (i.e., ext2, ext3, ext4, etc.) that is to be created.
+           -m reserved-blocks-percentage
+              Specify the percentage of the filesystem blocks reserved for the super-user. The default percentage is 5%.
+           -q Quiet execution. */
+        const char *const mke2fs_argv[] = { "/sbin/mke2fs", "-t", fstype, "-b", "4096", "-O", "^huge_file", "-m", "0", "-q", source, NULL };
+
+	/* is system? try enlarge it */
+	if (flags & MS_RDONLY)
+		run(resize2fs_argv[0], (char **) resize2fs_argv);
+        //run(e2fsck_argv[0], (char **) e2fsck_argv);
+        ext_check(source);
+        err = mount(source, target, fstype, flags, options);
+        if (!err)
+            return 0;
+	
+	if(strstr(target, "/system")){
+        	ERROR("Failed to mount %s, system didnot mount and will cause Android Error!!!\n", source);
+		return err;
+	}
+        ERROR("Failed to mount %s, format it to %s now\n", source, fstype);
+        run(mke2fs_argv[0], (char **) mke2fs_argv);
+        run(e2fsck_argv[0], (char **) e2fsck_argv);
+    } else if (!strncmp(fstype, "vfat", 4)) {
+        const char *const mkdosfs_argv[] = { "/sbin/mkdosfs", source, NULL };
+        vfat_check(source);
+        if (mount(source, target, fstype, flags, options)) {
+           run(mkdosfs_argv[0], (char **) mkdosfs_argv);
+           return mount(source, target, fstype, flags, options);
+        } else
+           return 0;
+    }
+
+    return mount(source, target, fstype, flags, options);
 }

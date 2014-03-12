@@ -439,10 +439,10 @@ static char **parse_platform_block_device(struct uevent *uevent)
         return NULL;
     device = pdev->name;
 
-    char **links = malloc(sizeof(char *) * 4);
+    char **links = malloc(sizeof(char *) * 5);
     if (!links)
         return NULL;
-    memset(links, 0, sizeof(char *) * 4);
+    memset(links, 0, sizeof(char *) * 5);
 
     INFO("found platform device %s\n", device);
 
@@ -457,6 +457,12 @@ static char **parse_platform_block_device(struct uevent *uevent)
             link_num++;
         else
             links[link_num] = NULL;
+
+		if (asprintf(&links[link_num], "/dev/block/mtd/by-name/%s", p) > 0)
+			link_num++;
+		else
+			links[link_num] = NULL;
+
         free(p);
     }
 
@@ -474,6 +480,36 @@ static char **parse_platform_block_device(struct uevent *uevent)
         links[link_num] = NULL;
 
     return links;
+}
+
+static char **parse_mtd_block_device(struct uevent *uevent)
+{
+    int partition_num;
+    const char *partition_name;
+    char *p;
+
+    char **links = malloc(sizeof(char *) * 2);
+    if (!links)
+        return NULL;
+    memset(links, 0, sizeof(char *) * 2);
+
+    partition_num = atoi(strstr(uevent->path, "/mtdblock") + 9);
+    partition_name = mtd_number_to_name(partition_num);
+    if (!partition_name)
+        goto err;
+
+    p = strdup(partition_name);
+    if (!p)
+        goto err;
+    sanitize(p);
+    asprintf(&links[0], "/dev/block/mtd/by-name/%s", p);
+    free(p);
+
+    return links;
+
+err:
+    free(links);
+    return NULL;
 }
 
 static void handle_device(const char *action, const char *devpath,
@@ -549,8 +585,10 @@ static void handle_block_device_event(struct uevent *uevent)
     snprintf(devpath, sizeof(devpath), "%s%s", base, name);
     make_dir(base, 0755);
 
-    if (!strncmp(uevent->path, "/devices/", 9))
+    if (!strncmp(uevent->path, "/devices/platform/", 18))
         links = parse_platform_block_device(uevent);
+    else if (strstr(uevent->path, "/mtdblock"))
+        links = parse_mtd_block_device(uevent);
 
     handle_device(uevent->action, devpath, uevent->path, 1,
             uevent->major, uevent->minor, links);
