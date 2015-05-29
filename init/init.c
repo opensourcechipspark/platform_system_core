@@ -864,7 +864,6 @@ static int bootchart_init_action(int nargs, char **args)
 #endif
 
 static const struct selinux_opt seopts_prop[] = {
-        { SELABEL_OPT_PATH, "/data/security/property_contexts" },
         { SELABEL_OPT_PATH, "/property_contexts" },
         { 0, NULL }
 };
@@ -980,6 +979,46 @@ static void selinux_initialize(void)
     security_setenforce(is_enforcing);
 }
 
+static void rk_set_cpu(void)
+{
+	int fd;
+	char buf[128];
+	char value[16]={"1200000"};
+	char min_freq[16]={"126000"};//126M
+	bool can_set_cpu = false;
+	
+	fd = open("/sys/devices/system/cpu/cpu0/cpufreq/scaling_available_frequencies",O_RDONLY);
+	
+    if (fd >= 0) {
+       int n = read(fd, buf, sizeof(buf) - 1);
+       if (n > 0) {
+           buf[n-1] = '\0';
+			//check whether 1.2G in the freqs table
+		   if(strstr(buf,value)){
+				can_set_cpu = true;
+		   }
+          // ERROR("available_frequencies %s \n",buf);  
+       }
+       close(fd);
+   }else{
+ 		ERROR("error to open scaling_available_frequencies");
+   	}
+   
+	
+		//first set write permission to root
+	chmod("/sys/devices/system/cpu/cpu0/cpufreq/scaling_min_freq", 0644);
+	fd = open("/sys/devices/system/cpu/cpu0/cpufreq/scaling_min_freq",O_RDWR);
+	if (fd >= 0) {
+	   read(fd, min_freq, sizeof(min_freq) - 1);
+	   if(can_set_cpu){
+       	    write(fd, value, strlen(value));
+	   }//if(can_set_cpu)
+	   close(fd);
+	 }//if (fd >= 0)
+	 
+   	 property_set("ro.rk.cpu_min_freq", min_freq);
+}
+	
 static void rk_parse_cpu(void)
 {
     int fd;
@@ -1054,14 +1093,15 @@ int main(int argc, char **argv)
          * be able to remount / read-only later on.
          * Now that tmpfs is mounted on /dev, we can actually
          * talk to the outside world.
-         */
+         */ 
     open_devnull_stdio();
-    klog_init();
-    memlog_init();
+    klog_init();	 
+    memlog_init();	 
     property_init();
-
+#ifdef TARGET_BOARD_PLATFORM_RK3288
+	rk_set_cpu();
+#endif
     rk_parse_cpu();
-
     get_hardware_name(hardware, &revision);
 
     process_kernel_cmdline();
@@ -1094,22 +1134,22 @@ int main(int argc, char **argv)
 
     action_for_each_trigger("early-init", action_add_queue_tail);
 
-    queue_builtin_action(wait_for_coldboot_done_action, "wait_for_coldboot_done");
+ 	queue_builtin_action(wait_for_coldboot_done_action, "wait_for_coldboot_done");
     queue_builtin_action(mix_hwrng_into_linux_rng_action, "mix_hwrng_into_linux_rng");
     queue_builtin_action(keychord_init_action, "keychord_init");
     queue_builtin_action(console_init_action, "console_init");
-
+	
     /* execute all the boot actions to get us started */
     action_for_each_trigger("init", action_add_queue_tail);
 
-    /* skip mounting filesystems in charger mode */
+   /* skip mounting filesystems in charger mode */
     if (!is_charger) {
         action_for_each_trigger("early-fs", action_add_queue_tail);
         action_for_each_trigger("fs", action_add_queue_tail);
         action_for_each_trigger("post-fs", action_add_queue_tail);
         action_for_each_trigger("post-fs-data", action_add_queue_tail);
     }
-
+   
     /* Repeat mix_hwrng_into_linux_rng in case /dev/hw_random or /dev/random
      * wasn't ready immediately after wait_for_coldboot_done
      */
@@ -1269,7 +1309,7 @@ int __mount(const char *source, const char *target,
 
 	/* is system? try enlarge it */
 	if (flags & MS_RDONLY)
-		run(resize2fs_argv[0], (char **) resize2fs_argv);
+		run(resize2fs_argv[0], (char **) resize2fs_argv);	
         //run(e2fsck_argv[0], (char **) e2fsck_argv);
         ext_check(source);
         err = mount(source, target, fstype, flags, options);

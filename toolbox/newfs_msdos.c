@@ -511,6 +511,7 @@ newfs_msdos_main(int argc, char *argv[])
     }
     if (!bpb.nft)
 	bpb.nft = 2;
+	bpb.res = 0x20;//zyf 8K ¶ÔÆë
     if (!fat) {
 	if (bpb.bsec < (bpb.res ? bpb.res : bss) +
 	    howmany((RESFTE + (bpb.spc ? MINCLS16 : MAXCLS12 + 1)) *
@@ -576,6 +577,9 @@ newfs_msdos_main(int argc, char *argv[])
 	(bpb.spc * bpb.bps * NPB + fat / BPN * bpb.nft);
     x2 = howmany((RESFTE + MIN(x, maxcls(fat))) * (fat / BPN),
 		 bpb.bps * NPB);
+
+    x2 = (x2+15)&0xFFFFFFF0;//zyf 8KB¶ÔÆë
+
     if (!bpb.bspf) {
 	bpb.bspf = x2;
 	x1 += (bpb.bspf - 1) * bpb.nft;

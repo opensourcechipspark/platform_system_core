@@ -27,7 +27,7 @@
 #include <sys/mman.h>
 #include <sys/types.h>
 
-#include <linux/ion.h>
+#include <ion/rockchip_ion.h>
 #include <ion/ion.h>
 
 int ion_open()
@@ -43,11 +43,53 @@ int ion_close(int fd)
         return close(fd);
 }
 
+static int get_ioctl_str(int req, char* req_name)
+{
+	switch (req) {
+	case ION_IOC_ALLOC:
+		sprintf(req_name, "ION_IOC_ALLOC");
+		break;
+	case ION_IOC_FREE:
+		sprintf(req_name, "ION_IOC_FREE");
+		break;
+	case ION_IOC_MAP:
+		sprintf(req_name, "ION_IOC_MAP");
+		break;
+	case ION_IOC_SHARE:
+		sprintf(req_name, "ION_IOC_SHARE");
+		break;
+	case ION_IOC_IMPORT:
+		sprintf(req_name, "ION_IOC_IMPORT");
+		break;
+	case ION_IOC_SYNC:
+		sprintf(req_name, "ION_IOC_SYNC");
+		break;
+	case ION_IOC_CUSTOM:
+		sprintf(req_name, "ION_IOC_CUSTOM");
+		break;
+	case ION_IOC_GET_PHYS:
+		sprintf(req_name, "ION_IOC_GET_PHYS");
+		break;
+	case ION_IOC_GET_SHARE_ID:
+		sprintf(req_name, "ION_IOC_GET_SHARE_ID");
+		break;
+	case ION_IOC_SHARE_BY_ID:
+		sprintf(req_name, "ION_IOC_SHARE_BY_ID");
+		break;
+	default:
+		sprintf(req_name, "UNKNOWN");
+		break;
+	}
+	return 0;
+}
+
 static int ion_ioctl(int fd, int req, void *arg)
 {
         int ret = ioctl(fd, req, arg);
         if (ret < 0) {
-                ALOGE("ioctl %x failed with code %d: %s\n", req,
+				char req_name[64];
+				get_ioctl_str(req, req_name);
+                ALOGE("ioctl %s(%x) failed with code %d: %s\n", req_name, req,
                        ret, strerror(errno));
                 return -errno;
         }
@@ -154,3 +196,120 @@ int ion_sync_fd(int fd, int handle_fd)
     };
     return ion_ioctl(fd, ION_IOC_SYNC, &data);
 }
+
+int ion_get_phys(int fd, struct ion_handle *handle, unsigned long *phys)
+{
+    struct ion_phys_data phys_data;
+    struct ion_custom_data data;
+
+    phys_data.handle = handle;
+    phys_data.phys = 0;
+
+    data.cmd = ION_IOC_GET_PHYS;
+    data.arg = (unsigned long)&phys_data;
+
+    int ret = ion_ioctl(fd, ION_IOC_CUSTOM, &data);
+    if (ret<0)
+        return ret;
+
+    *phys = phys_data.phys;
+
+    return 0;
+}
+
+int ion_get_share_id(int fd, int share_fd, unsigned int *id)
+{
+	struct ion_share_id_data share_data = {
+		.fd = share_fd,
+		.id = 0,
+	};
+
+	struct ion_custom_data data = {
+		.cmd = ION_IOC_GET_SHARE_ID,
+		.arg = (unsigned long)&share_data,
+	};
+
+	int ret = ion_ioctl(fd, ION_IOC_CUSTOM, &data);
+	if (ret<0)
+		return ret;
+
+	*id = share_data.id;
+
+	return 0;
+}
+
+int ion_share_by_id(int fd, int *share_fd, unsigned int id)
+{
+	struct ion_share_id_data share_data = {
+		.fd = 0,
+		.id = id,
+	};
+
+	struct ion_custom_data data = {
+		.cmd = ION_IOC_SHARE_BY_ID,
+		.arg = (unsigned long)&share_data,
+	};
+
+	int ret = ion_ioctl(fd, ION_IOC_CUSTOM, &data);
+	if (ret<0)
+		return ret;
+
+	*share_fd = share_data.fd;
+
+	return 0;
+}
+
+enum {
+	CACHE_CLEAN = 0,
+	CACHE_INV,
+	CACHE_CLEAN_INV,
+};
+
+static int clean_inv_cache(int fd, struct ion_handle *handle, void *base, size_t size, int offset, int ops)
+{
+	struct ion_flush_data flush_data = {
+		.handle = handle,
+		.vaddr = base,
+		.offset = offset,
+		.length = size,
+	};
+
+	struct ion_custom_data data = {
+		.arg = (unsigned long)&flush_data,
+	};
+
+	switch(ops) {
+	case CACHE_CLEAN:
+		data.cmd = ION_IOC_CLEAN_CACHES;
+		break;
+	case CACHE_INV:
+		data.cmd = ION_IOC_INV_CACHES;
+		break;
+	case CACHE_CLEAN_INV:
+		data.cmd = ION_IOC_CLEAN_INV_CACHES;
+		break;
+	}
+
+	int ret = ion_ioctl(fd, ION_IOC_CUSTOM, &data);
+
+	if (ret<0)
+		return ret;
+
+    return 0;
+}
+
+inline int ion_clean_cache(int fd, struct ion_handle *handle, void *base, size_t size, int offset)
+{
+	return clean_inv_cache(fd, handle, base, size, offset, CACHE_CLEAN);
+}
+
+inline int ion_inv_cache(int fd, struct ion_handle *handle, void *base, size_t size, int offset)
+{
+	return clean_inv_cache(fd, handle, base, size, offset, CACHE_INV);
+}
+
+inline int ion_clean_inv_cache(int fd, struct ion_handle *handle, void *base, size_t size, int offset)
+{
+	return clean_inv_cache(fd, handle, base, size, offset, CACHE_CLEAN_INV);
+}
+

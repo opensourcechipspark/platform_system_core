@@ -127,3 +127,24 @@ ALL_DEFAULT_INSTALLED_MODULES += $(SYMLINKS)
 # local module name
 ALL_MODULES.$(LOCAL_MODULE).INSTALLED := \
     $(ALL_MODULES.$(LOCAL_MODULE).INSTALLED) $(SYMLINKS)
+
+
+include $(CLEAR_VARS)
+
+LOCAL_SRC_FILES := \
+	mkdosfs.c
+
+LOCAL_CFLAGS := -DMKDOSFS_BINARY
+LOCAL_C_INCLUDES := bionic/libc/bionic
+
+LOCAL_STATIC_LIBRARIES := \
+	libcutils \
+	liblog \
+	libc
+
+LOCAL_MODULE := mkdosfs
+LOCAL_MODULE_PATH := $(TARGET_ROOT_OUT_SBIN)
+
+# Including this will define $(intermediates).
+#
+include $(BUILD_EXECUTABLE)

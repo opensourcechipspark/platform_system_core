@@ -37,6 +37,13 @@ int ion_map(int fd, struct ion_handle *handle, size_t length, int prot,
             int flags, off_t offset, unsigned char **ptr, int *map_fd);
 int ion_share(int fd, struct ion_handle *handle, int *share_fd);
 int ion_import(int fd, int share_fd, struct ion_handle **handle);
+int ion_get_phys(int fd, struct ion_handle *handle, unsigned long *phys);
+int ion_get_share_id(int fd, int share_fd, unsigned int *id);
+int ion_share_by_id(int fd, int *share_fd, unsigned int id);
+int ion_clean_cache(int fd, struct ion_handle *handle, void *base, size_t size, int offset);
+int ion_inv_cache(int fd, struct ion_handle *handle, void *base, size_t size, int offset);
+int ion_clean_inv_cache(int fd, struct ion_handle *handle, void *base, size_t size, int offset);
+
 
 __END_DECLS
 

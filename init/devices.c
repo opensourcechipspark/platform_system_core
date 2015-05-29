@@ -585,10 +585,10 @@ static void handle_block_device_event(struct uevent *uevent)
     snprintf(devpath, sizeof(devpath), "%s%s", base, name);
     make_dir(base, 0755);
 
-    if (!strncmp(uevent->path, "/devices/platform/", 18))
-        links = parse_platform_block_device(uevent);
-    else if (strstr(uevent->path, "/mtdblock"))
+    if (strstr(uevent->path, "/mtdblock"))
         links = parse_mtd_block_device(uevent);
+    else if (!strncmp(uevent->path, "/devices/", 9))
+        links = parse_platform_block_device(uevent);
 
     handle_device(uevent->action, devpath, uevent->path, 1,
             uevent->major, uevent->minor, links);

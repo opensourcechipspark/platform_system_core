@@ -651,11 +651,11 @@ void generate_device_serialno(int len,char*result)
 				}
 			}
 			
-			//add up operation for some wifi chip
-			set_iface("wlan0", 1);
-
 		}
+		SLOGE("------------ set_iface ----------------");
+		set_iface("wlan0", 1);
 		store_wlan_mac();//buffer mac to data
+		set_iface("wlan0", 0);
 	}
 	
 	fd = open(WLAN_MAC_FILE, O_RDONLY);

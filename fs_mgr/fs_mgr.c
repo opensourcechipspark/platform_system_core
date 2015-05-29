@@ -370,25 +370,26 @@ static void parse_link_device(struct fstab_rec *rec)
         return;
 
     path = get_linkname(rec->blk_device);
-    if (NULL == path) {
-        ERROR("%s : path = NULL", __func__);
+    if (NULL == path || !strncmp(path, "/devices/", 9)) {
+        ERROR("%s : path = NULL\n", __func__);
         goto errout;
     }
-    ERROR("%s : in", __func__);
+    ERROR("%s %s: in\n", __func__, path);
     
     if (NULL != (part_name = strstr(path, "mtdblock"))) {
         part_num = atoi(part_name + 8);
     } else if (NULL != (part_name = strstr(path, "mmcblk"))) {
-        if (sscanf(part_name, "mmcblk%dp%d", &mmc_num, &part_num)) {
-            ERROR("%s : error in parse emmc partnum", __func__);
+        if (0 > sscanf(part_name, "mmcblk%dp%d", &mmc_num, &part_num)) {
+            ERROR("%s : error in parse emmc partnum, %s\n", __func__, strerror(errno));
             goto errout;
         }
         is_emmc = 1;
     } else {
-        ERROR("%s : error parse path", __func__);
+        ERROR("%s : error parse path\n", __func__);
         goto errout;
     }
     free(path);
+    path = NULL;
 
     if (!is_emmc) {
         path = calloc(sizeof(char), (strlen(MTD_PATH_FORMAT) + 10));
@@ -432,6 +433,9 @@ struct fstab *fs_mgr_read_fstab(const char *fstab_path)
     }
 
     entries = 0;
+    int old_format = 0; //add by zhengsq@rock-chips.com, to support 4.2.2, old format of recovery.emmc.fstab
+    int i = 0;
+    char *defaults = "defaults";
     while (fs_getline(line, sizeof(line), fstab_file)) {
         /* if the last character is a newline, shorten the string by 1 byte */
         len = strlen(line);
@@ -446,6 +450,23 @@ struct fstab *fs_mgr_read_fstab(const char *fstab_path)
         /* ignore comments or empty lines */
         if (*p == '#' || *p == '\0')
             continue;
+
+        //checkout if the fstab is old format used by 4.2.2 , zhengsq@rock-chips.com
+        char *pl;
+        char *pstok;
+        if (strstr(p, "ext4") != NULL) {
+            pl = p;    
+            i = 0;
+            while((pstok = strtok_r(pl, delim, &save_ptr)) != NULL) {
+                i++;
+                pl = NULL;
+                if(! strcmp(pstok, "ext4")) {
+                    old_format =  (i == 2) ? 1:0 ;
+                    break;
+                }
+            }
+        }
+ 
         entries++;
     }
 
@@ -494,26 +515,36 @@ struct fstab *fs_mgr_read_fstab(const char *fstab_path)
             ERROR("Error parsing mount source\n");
             return 0;
         }
-        fstab->recs[cnt].blk_device = strdup(p);
+        if(old_format)
+            fstab->recs[cnt].mount_point = strdup(p);
+        else
+            fstab->recs[cnt].blk_device = strdup(p);
 
         if (!(p = strtok_r(NULL, delim, &save_ptr))) {
             fs_mgr_free_fstab(fstab);
             ERROR("Error parsing mount_point\n");
             return 0;
         }
-        fstab->recs[cnt].mount_point = strdup(p);
+        if(old_format)
+            fstab->recs[cnt].fs_type = strdup(p);
+        else
+            fstab->recs[cnt].mount_point = strdup(p);
 
         if (!(p = strtok_r(NULL, delim, &save_ptr))) {
             fs_mgr_free_fstab(fstab);
             ERROR("Error parsing fs_type\n");
             return 0;
         }
-        fstab->recs[cnt].fs_type = strdup(p);
+        if(old_format)
+            fstab->recs[cnt].blk_device = strdup(p);
+        else
+            fstab->recs[cnt].fs_type = strdup(p);
 
         if (!(p = strtok_r(NULL, delim, &save_ptr))) {
-            fs_mgr_free_fstab(fstab);
-            ERROR("Error parsing mount_flags\n");
-            return 0;
+            //fs_mgr_free_fstab(fstab);
+            INFO("No mount flages found, use defaults to support old format of fstab");
+            p = defaults;
+            //return 0;
         }
         tmp_fs_options[0] = '\0';
         fstab->recs[cnt].flags = parse_flags(p, mount_flags, NULL,
@@ -527,9 +558,10 @@ struct fstab *fs_mgr_read_fstab(const char *fstab_path)
         }
 
         if (!(p = strtok_r(NULL, delim, &save_ptr))) {
-            ERROR("Error parsing fs_mgr_options\n");
-            fs_mgr_free_fstab(fstab);
-            return 0;
+            //fs_mgr_free_fstab(fstab);
+            INFO("No fs_mgr_flags found, use defaults to support old format of fstab");
+            p = defaults;
+            //return 0;
         }
         fstab->recs[cnt].fs_mgr_flags = parse_flags(p, fs_mgr_flags,
                                                     &flag_vals, NULL, 0);

@@ -1,3 +1,6 @@
+#define LOG_TAG "iontest"
+
+#include <cutils/log.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
@@ -14,6 +17,8 @@
 #include <ion/ion.h>
 #include <linux/ion.h>
 #include <linux/omap_ion.h>
+#include <sys/time.h>
+#include <unistd.h>
 
 size_t len = 1024*1024, align = 0;
 int prot = PROT_READ | PROT_WRITE;
@@ -22,6 +27,14 @@ int alloc_flags = 0;
 int heap_mask = 1;
 int test = -1;
 size_t stride;
+int verbose = 0;
+
+/*
+#define PRINTV(...)  \
+	if(verbose) { \
+		printf(); \
+	}
+*/
 
 int _ion_alloc_test(int *fd, struct ion_handle **handle)
 {
@@ -193,6 +206,497 @@ void ion_share_test()
 	}
 }
 
+enum cmd_index {
+	ION_OPEN = 0,
+	ION_CLOSE,
+	ION_ALLOC,
+	ION_FREE,
+	ION_MAP,
+	ION_SHARE,
+	ION_ALLOC_FD,
+	ION_IMPORT,
+	ION_SYNC_FD,
+	ION_GET_PHYS,
+	ION_GET_SHARE_ID,
+	ION_SHARE_BY_ID,
+	ION_CLEAN_CACHE,
+	ION_INV_CACHE,
+	ION_CLEAN_INV_CACHE,
+	SYS_MMAP,
+	SYS_MUNMAP,
+	SHARE_CLOSE,
+	DATA_CHECK,
+	DATA_READ,
+	DATA_WRITE,
+	PRINT,
+	SYS_MALLOC,
+	SYS_FREE,
+	ION_CMD_MAX,
+};
+
+const char* ion_cmd[] = {
+	"ion_open",
+	"ion_close",
+	"ion_alloc",
+	"ion_free",
+	"ion_map",
+	"ion_share",
+	"ion_alloc_fd",
+	"ion_import",
+	"ion_sync_fd",
+	"ion_get_phys",
+	"ion_get_share_id",
+	"ion_share_by_id",
+	"ion_clean_buffer",
+	"ion_inv_buffer",
+	"ion_clean_inv_buffer",
+	"mmap",
+	"munmap",
+	"share_close",
+	"data_check",
+	"data_read",
+	"data_write",
+	"print",
+	"malloc",
+	"free",
+};
+
+struct ion_param {
+	int ion_fd;
+	struct ion_handle *handle;
+	int share_fd;
+	unsigned int share_id;
+	unsigned char* map_ptr;
+	size_t map_size;
+	void *malloc_ptr;
+};
+
+int compare_cmd(const char* src, const char* dst, int len)
+{
+	char* p=NULL;
+	int src_len = strlen(src);
+	p = strchr(src, ',');
+	if (p)
+		src_len = p - src;
+	return strncmp(src, dst, (src_len>len)?src_len:len);
+}
+
+int timeval_subtract(struct timeval* result, struct timeval* x, struct timeval* y)
+{
+	int nsec;
+
+	if (x->tv_sec>y->tv_sec)
+		return -1;
+
+	if ((x->tv_sec==y->tv_sec) && (x->tv_usec>y->tv_usec))
+		return -1;
+	result->tv_sec = (y->tv_sec-x->tv_sec);
+	result->tv_usec = (y->tv_usec-x->tv_usec);
+	if (result->tv_usec<0)
+	{
+		result->tv_sec--;
+		result->tv_usec+=1000000;
+	}
+
+	return 0;
+}
+
+int timeval_increase(struct timeval* x, struct timeval* y)
+{
+	int nsec;
+
+	x->tv_sec += y->tv_sec;
+	x->tv_usec += y->tv_usec;
+	if (x->tv_usec>=1000000)
+	{
+		x->tv_sec++;
+		x->tv_usec-=1000000;
+	}
+
+	return 0;
+}
+
+unsigned char* buff_test=NULL;
+struct loop_cmd {
+	char cmd[512];
+	int count;
+	long long used_tm;
+	long long used_max;
+	long long used_min;
+};
+
+int exec_ion_cmd(struct ion_param *param, struct loop_cmd *curr_cmd)//const char* line)
+{
+	int ret=0;
+	int cmd;
+	const char* line = curr_cmd->cmd;
+
+	for(cmd=0; cmd<ION_CMD_MAX; cmd++) {
+		if (!compare_cmd(line, ion_cmd[cmd], strlen(ion_cmd[cmd])))
+			break;
+	}
+
+	// ´¦ÀíÃüÁî
+	switch(cmd) {
+	case ION_OPEN:
+		ret = ion_open();
+		if (ret>0) {
+			param->ion_fd = ret;
+		}
+		if(verbose) printf("ion_open return %d\n", ret);
+		break;
+	case ION_CLOSE:
+		if(verbose) printf("ion_close %d\n", param->ion_fd);
+		ion_close(param->ion_fd);
+		param->ion_fd = 0;
+		break;
+	case ION_ALLOC:
+	{
+		size_t a_len;
+		size_t a_align;
+		unsigned int flags;
+		unsigned int a_heap_mask;
+		if (sscanf(line, "ion_alloc,%d,%d,%d,%d", &a_len, &a_align, &a_heap_mask, &flags)==4){
+			ret=ion_alloc(param->ion_fd, a_len, a_align, a_heap_mask, flags, &(param->handle));
+			if(verbose) printf("alloc handle = %p\n", param->handle);
+			if (ret)
+				printf("!! alloc failed: %s\n", strerror(errno));
+		} else 
+			printf("get parameter failed\n");
+		ret = 0;// don't exit
+		if (buff_test==NULL) {
+			int t_fd, t_share_fd;
+			struct ion_handle *t_handle;
+			size_t t_len = 32*1024*1024;
+
+			printf("alloc 32MB buffer for test\n");
+
+			if (ion_alloc_fd(param->ion_fd, t_len, a_align, a_heap_mask, flags, &t_share_fd)) {
+				printf("!! alloc failed: %s\n", strerror(errno));
+				return -1;
+			}
+
+			buff_test = mmap(NULL, t_len, PROT_READ|PROT_WRITE,
+				MAP_SHARED, t_share_fd, 0);
+			if (buff_test==MAP_FAILED) {
+				printf("!! mmap failed: %s\n", strerror(errno));
+				return -1;
+			}
+			memset(buff_test, 0x5A, t_len);
+		}
+
+		break;
+	}
+	case ION_ALLOC_FD:
+	{
+		size_t a_len;
+		size_t a_align;
+		unsigned int flags;
+		unsigned int a_heap_mask;
+		if (sscanf(line, "ion_alloc_fd,%d,%d,%d,%d", &a_len, &a_align, &a_heap_mask, &flags)==4){
+			ret=ion_alloc_fd(param->ion_fd, a_len, a_align, a_heap_mask, flags, &(param->share_fd));
+			if(verbose) printf("alloc share fd = %d\n", param->share_fd);
+			if (ret)
+				printf("!! alloc failed: %s\n", strerror(errno));
+		} else 
+			printf("get parameter failed\n");
+		ret = 0;// don't exit
+		break;
+	}
+	case ION_FREE:
+		if(verbose) printf("free handle = %p\n", param->handle);
+		ion_free(param->ion_fd, param->handle);
+		break;
+	case ION_MAP:
+	{
+		size_t a_len;
+		size_t a_offset;
+		if (sscanf(line, "ion_map,%d,%d", &a_len, &a_offset)==2){
+			param->map_size = a_len;
+			ret=ion_map(param->ion_fd, param->handle, a_len, 
+				PROT_READ|PROT_WRITE, MAP_SHARED, a_offset, &param->map_ptr,
+				&(param->share_fd));
+			if (ret)
+				printf("!! ion_map failed: %s\n", strerror(errno));
+			if(verbose) printf("ion_map: ptr=%p share_fd=%d\n", param->map_ptr, param->share_fd);
+		} else 
+			printf("get parameter failed\n");
+		break;
+	}
+	case ION_SHARE:
+		ret=ion_share(param->ion_fd, param->handle, &(param->share_fd));
+		if(verbose) printf("get share fd=%d\n", param->share_fd);
+		if (ret)
+			printf("!! share failed %s\n", strerror(errno));
+		break;
+	case ION_IMPORT:
+		ret = ion_import(param->ion_fd, param->share_fd, &(param->handle));
+		if(verbose) printf("get handle=%p\n", param->handle);
+		if (ret<0)
+			printf("!! import failed %s\n", strerror(errno));
+		break;
+	case ION_GET_PHYS:
+	{
+		unsigned long phys;
+		ret = ion_get_phys(param->ion_fd, param->handle, &phys);
+		if (ret<0)
+			printf("!! get phys failed %s\n", strerror(errno));
+		if(verbose) printf("PHYS=0x%08lX\n", phys);
+		break;
+	}
+	case ION_GET_SHARE_ID:
+		ret = ion_get_share_id(param->ion_fd, param->share_fd, &(param->share_id));
+		if (ret<0)
+			printf("!! get share id failed %s\n", strerror(errno));
+		if(verbose) printf("share id=0x%08X\n", param->share_id);
+		break;
+	case ION_SHARE_BY_ID:
+	{
+		unsigned int id;
+		if (sscanf(line, "ion_share_by_id,0x%X", &id)!=1){
+			id = param->share_id;
+		}
+		if(verbose) printf("share id=0x%08X\n", id);
+		ret = ion_share_by_id(param->ion_fd, &(param->share_fd), id);
+		if (ret<0)
+			printf("!! share by id failed %s\n", strerror(errno));
+		if(verbose) printf("get share fd=%d\n", param->share_fd);
+		break;
+	}
+	case SYS_MMAP:
+	{
+		size_t a_len;
+		size_t a_offset;
+		if (sscanf(line, "mmap,%d,%d", &a_len, &a_offset)==2){
+			param->map_ptr = mmap(NULL, a_len, PROT_READ|PROT_WRITE,
+				MAP_SHARED,	param->share_fd, a_offset);
+			if (param->map_ptr==MAP_FAILED) {
+				printf("!! mmap failed: %s\n", strerror(errno));
+				ret = -1;
+			}
+			if(verbose) printf("mmap: ptr=%p\n", param->map_ptr);
+		} else
+			printf("get parameter failed\n");
+		break;
+	}
+	case SYS_MUNMAP:
+	{
+		size_t a_len;
+		munmap(param->map_ptr, param->map_size);
+		break;
+	}
+	case SHARE_CLOSE:
+		if(verbose) printf("close share fd=%d\n", param->share_fd);
+		if (param->share_fd>0)
+			close(param->share_fd);
+		break;
+	case DATA_CHECK:
+	{
+		size_t a_len;
+		int i;
+		int t;
+		struct timeval start,stop,diff;
+		if (sscanf(line, "data_check,%d", &a_len)==1){
+			gettimeofday(&start,0);
+			for (i=0; i<a_len; i++) {
+				param->map_ptr[i] = (unsigned char)i;
+			}
+			ion_clean_cache(param->ion_fd, param->handle, param->map_ptr, a_len, 0);
+			ion_inv_cache(param->ion_fd, param->handle, param->map_ptr, a_len, 0);
+			for (i=0; i<a_len; i++)
+				if (param->map_ptr[i] != (unsigned char)i) {
+					printf("failed wrote %d read %d from mapped "
+						   "memory\n", i, param->map_ptr[i]);
+					break;
+				}
+		} else
+			printf("get parameter failed\n");
+		break;
+	}
+	case DATA_READ:
+	{
+		size_t a_len;
+		int i;
+		if (sscanf(line, "data_read,%d", &a_len)==1){
+			memcpy(buff_test, param->map_ptr, a_len);
+		}
+		break;
+	}
+	case DATA_WRITE:
+	{
+		size_t a_len;
+		int i;
+		if (sscanf(line, "data_write,%d", &a_len)==1){
+			memcpy(param->map_ptr, buff_test, a_len);
+		}
+		break;
+	}
+	case SYS_MALLOC:
+	{
+		size_t a_len;
+		printf("malloc prev %p\n", param->malloc_ptr);
+		if (sscanf(line, "malloc,%d", &a_len)==1){
+			param->malloc_ptr = malloc(a_len);
+			printf("malloc %p\n", param->malloc_ptr);
+			memset(param->malloc_ptr, 1, a_len);
+		}
+		break;
+	}
+	case SYS_FREE:
+		free(param->malloc_ptr);
+		param->malloc_ptr = NULL;
+		break;
+	case ION_SYNC_FD:
+		ion_sync_fd(param->ion_fd, param->share_fd);
+		break;
+	case PRINT:
+		line += strlen("print,");
+		printf("%s\n", line);
+		break;
+	case ION_CLEAN_CACHE:
+		ion_clean_cache(param->ion_fd, param->handle, param->map_ptr, param->map_size, 0);
+		break;
+	case ION_INV_CACHE:
+		ion_inv_cache(param->ion_fd, param->handle, param->map_ptr, param->map_size, 0);
+		break;
+	case ION_CLEAN_INV_CACHE:
+		ion_clean_inv_cache(param->ion_fd, param->handle, param->map_ptr, param->map_size, 0);
+		break;
+	}
+
+	return ret;
+}
+
+int script_test(const char* fname)
+{
+	FILE* fp = fopen(fname, "r");
+	int loop_count = 0;
+	struct ion_param* loop_param = NULL;
+	struct ion_param this_param;
+	int collect_cmd = 0;
+	struct loop_cmd loop_cmds[100];
+	struct loop_cmd this_cmd;
+	struct loop_cmd *curr_cmd;
+	struct ion_param* curr_loop_param = NULL;
+	int cmd_ind = 0;
+
+	printf("read cmd from script file: %s\n", fname);
+	
+	if (fp==NULL)
+	{
+		perror("fopen");
+		return -1;
+	}
+
+	while(1)
+	{
+		int i;
+		char* line = NULL;
+		if (loop_count>0 && collect_cmd==0)
+			curr_cmd = &loop_cmds[cmd_ind++];
+		else if (fgets(this_cmd.cmd, 511, fp)) {
+			this_cmd.count = 0;
+			this_cmd.used_tm = 0;
+			this_cmd.used_max = 0;
+			this_cmd.used_min = 0;
+			curr_cmd = &this_cmd;
+		} else
+			break;
+		line = curr_cmd->cmd;
+
+		i=0;
+		while(line[i]) {
+			if (line[i]=='\r' || line[i]=='\n') line[i] = '\0';
+			++i;
+		}
+
+		if (line[0]=='#' || line[0]=='\r' || line[0]=='\n')
+			continue;
+
+		if(verbose) printf("CMD: %s\n", line);
+
+		if (!strncmp(line, "loop,", strlen("loop,"))) {
+			sscanf(line, "loop,%d", &loop_count);
+			if(verbose) printf("loop count: %d\n", loop_count);
+			loop_param = malloc(sizeof(struct ion_param)*loop_count);
+			memset(loop_param, 0, sizeof(struct ion_param)*loop_count);
+			curr_loop_param = loop_param;
+			collect_cmd = 1;
+			for (i=0;i<100;i++) {
+				loop_cmds[i].cmd[0] = 0;
+				loop_cmds[i].used_tm = 0;
+				loop_cmds[i].used_max = 0;
+				loop_cmds[i].used_min = 0;
+				loop_cmds[i].count = 0;
+			}
+			cmd_ind = 0;
+			continue;
+		}
+
+		if (collect_cmd){
+			strcpy(loop_cmds[cmd_ind].cmd, line);
+			curr_cmd = &loop_cmds[cmd_ind];
+			line = curr_cmd->cmd;
+			++cmd_ind;
+		}
+
+		if (!strcmp(line, "end")) {
+			collect_cmd = 0;
+			--loop_count;
+			cmd_ind = 0;
+			++curr_loop_param;
+			if(verbose) printf("----- loop: %d -----\n", loop_count);
+			if (loop_count==0) {
+				for(i=0; i<100 && loop_cmds[i].count>0; i++) {
+					long long av = (loop_cmds[i].used_tm-loop_cmds[i].used_max-loop_cmds[i].used_min) / (loop_cmds[i].count-2);
+					printf("CMD(%32.32s) : %.4d : %.8lld : AV(%lld)\n", loop_cmds[i].cmd,
+						loop_cmds[i].count, loop_cmds[i].used_tm, av);
+				}
+				free(loop_param);
+				loop_param = NULL;
+				for (i=0;i<100;i++) {
+					loop_cmds[i].cmd[0] = 0;
+					loop_cmds[i].used_tm = 0;
+					loop_cmds[i].used_max = 0;
+					loop_cmds[i].used_min = 0;
+					loop_cmds[i].count = 0;
+				}
+			}
+		} else if (!strncmp(line, "pause", strlen("pause"))) {
+			getc(stdin);
+		} else {
+			struct ion_param* param = loop_count?curr_loop_param:&this_param;
+			struct timeval start,stop,diff;
+			if (loop_count && param->ion_fd==0)
+				memcpy(param, &this_param, sizeof(struct ion_param));
+
+			gettimeofday(&start,0);
+			if (exec_ion_cmd(param, curr_cmd)<0){
+				printf("cmd exec fault, press Enter for exit!\n");
+				getc(stdin);
+				break;
+			}
+			gettimeofday(&stop,0);
+			timeval_subtract(&diff,&start,&stop);
+			long long tm = (long long)diff.tv_sec*1000*1000+diff.tv_usec;
+			curr_cmd->used_tm += tm;
+			if (!curr_cmd->used_max || tm > curr_cmd->used_max)
+				curr_cmd->used_max = tm;
+			else if (!curr_cmd->used_min || tm<curr_cmd->used_min)
+				curr_cmd->used_min = tm;
+			++curr_cmd->count;
+			ALOGD("%s : %ld.%06ld\n", line, diff.tv_sec,diff.tv_usec);
+		}
+	}
+
+	fclose(fp);
+
+	free(loop_param);
+	loop_param = NULL;
+
+	return 0;
+}
+
 int main(int argc, char* argv[]) {
 	int c;
 	enum tests {
@@ -210,9 +714,11 @@ int main(int argc, char* argv[]) {
 			{"align", required_argument, 0, 'g'},
 			{"map_flags", required_argument, 0, 'z'},
 			{"prot", required_argument, 0, 'p'},
+			{"test", required_argument, 0, 't'},
+			{"verbose", required_argument, 0, 'v'},
 		};
 		int i = 0;
-		c = getopt_long(argc, argv, "af:h:l:mr:st", opts, &i);
+		c = getopt_long(argc, argv, "af:h:l:mr:st:v", opts, &i);
 		if (c == -1)
 			break;
 
@@ -255,6 +761,12 @@ int main(int argc, char* argv[]) {
 			break;
 		case 's':
 			test = SHARE_TEST;
+			break;
+		case 't':
+			script_test(optarg);
+			return 0;
+		case 'v':
+			verbose = 1;
 			break;
 		}
 	}
